@@ -323,23 +323,40 @@ def cleanup_package_files(name: str) -> int:
     return removed_count
 
 
-def cmd_list(packages_dir: Path):
+def cmd_list(packages_dir: Path, only=None):
     print(f"\n  {DIM}Fetching package index...{R}")
     pkgs = load_all_packages(packages_dir)
     if not pkgs:
         print(f"\n  {YELLOW}  No packages found.{R}\n")
         return
 
+    rows = []
+    for p in pkgs:
+        status, label = get_status(p["name"], p["version"])
+        if only == "installed" and status == "NOT INSTALLED":
+            continue
+        if only == "outdated" and status != "UPDATE":
+            continue
+        rows.append((p, label))
+
+    if not rows:
+        empty = {
+            "installed": "No packages from the store are installed.",
+            "outdated": "Everything is up to date.",
+        }[only]
+        print(f"\n  {YELLOW}  {empty}{R}\n")
+        return
+
     W = 24
     print(f"\n  {B}{CYAN}{'PACKAGE':<{W}} {'VERSION':<12} STATUS{R}")
     print(f"  {DIM}{'─' * 62}{R}")
 
-    for p in pkgs:
-        _, label = get_status(p["name"], p["version"])
+    for p, label in rows:
         print(f"  {B}{p['name']:<{W}}{R} {CYAN}{p['version']:<12}{R} {label}")
 
     print(f"\n  {DIM}{'─' * 62}{R}")
-    print(f"  {DIM}{len(pkgs)} package(s) total{R}\n")
+    qualifier = {None: "total", "installed": "installed", "outdated": "outdated"}[only]
+    print(f"  {DIM}{len(rows)} package(s) {qualifier}{R}\n")
 
 
 def cmd_show(packages_dir: Path, name: str):
@@ -1110,6 +1127,8 @@ def cmd_help():
 
 {B}PACKAGE COMMANDS:{R}
   {CYAN}list{R}  {DIM}| -l | -L{R}             List all packages + status
+  {CYAN}list --installed{R}            Only packages installed from the store
+  {CYAN}list --outdated{R}             Only packages with an update available
   {CYAN}search{R} {DIM}| find{R} {B}<query>{R}       Search packages by name or description
   {CYAN}install{R} {DIM}| i | -i{R} {B}<pkg>{R}      Install packages {DIM}(fast — pre-built .deb){R}
   {CYAN}uninstall{R} {DIM}| remove{R} {B}<pkg>{R}    Uninstall packages
@@ -1126,6 +1145,14 @@ def cmd_help():
   {CYAN}cache info{R}                  Show local .deb cache info
   {CYAN}cache clear{R}                 Clear local .deb cache
 
+{B}TOOLS:{R}
+  {CYAN}doctor{R} {DIM}[--fix|--brief|--json]{R}  Diagnose the environment {DIM}(--pkg <name> checks a build.sh){R}
+  {CYAN}guide{R} {DIM}[--lang en|id]{R}          Open the full guidebook
+
+{B}APT REPOSITORY:{R}
+  {CYAN}install-repo{R}                Add the signed apt repository {DIM}(pkg update shows it){R}
+  {CYAN}uninstall-repo{R}              Remove the apt repository and key
+
 {B}INFO:{R}
   {CYAN}version{R} {DIM}| -v{R}                Show app version
   {CYAN}help{R}    {DIM}| -h | --help{R}       Show this help message
@@ -1140,7 +1167,61 @@ def cmd_help():
   {DIM}termux-app-store mirrors{R}
   {DIM}termux-app-store cache info{R}
   {DIM}termux-app-store -l{R}
+  {DIM}termux-app-store list --outdated{R}
+  {DIM}termux-app-store doctor{R}
+  {DIM}termux-app-store guide{R}
 """)
+
+
+def _import_sibling(name: str):
+    import importlib
+
+    for prefix in ("termux_app_store.", ""):
+        try:
+            return importlib.import_module(prefix + name)
+        except ModuleNotFoundError as exc:
+            if exc.name not in (prefix + name, "termux_app_store"):
+                raise
+    raise ImportError(f"cannot import module '{name}'")
+
+
+def cmd_doctor(extra: list):
+    doctor = _import_sibling("doctor")
+
+    sys.argv = ["doctor", *extra]
+    doctor.run()
+
+
+def cmd_guide(extra: list):
+    guidebook = _import_sibling("guidebook")
+
+    lang = None
+    if "--lang" in extra:
+        i = extra.index("--lang")
+        lang = extra[i + 1] if i + 1 < len(extra) else None
+        if lang not in ("en", "id"):
+            print(f"{RED}[!] Usage: termux-app-store guide [--lang en|id]{R}")
+            sys.exit(1)
+    guidebook.run(lang)
+
+
+def cmd_repo(action: str):
+    repo_setup = _import_sibling("repo_setup")
+
+    if action == "install-repo":
+        ok, msg = repo_setup.add_repo()
+        if not ok:
+            print(f"{RED}[!] {msg}{R}")
+            sys.exit(1)
+        print(f"{GREEN}[+] Apt repository added:{R} {repo_setup.REPO_URL}")
+        print(f"    Run {CYAN}pkg update{R} to activate it.")
+    else:
+        removed = repo_setup.remove_repo()
+        for path in removed:
+            print(f"{GREEN}[+] Removed {path}{R}")
+        if not removed:
+            print(f"{YELLOW}[!] Repository was not installed.{R}")
+        print(f"    Run {CYAN}pkg update{R} to apply. Automatic re-adding is now disabled.")
 
 
 CMD_ALIASES = {
@@ -1169,6 +1250,13 @@ CMD_ALIASES = {
     "-m": "mirrors",
     "cache": "cache",
     "-c": "cache",
+    "install-repo": "install-repo",
+    "uninstall-repo": "uninstall-repo",
+    "--installed": "list",
+    "--outdated": "list",
+    "doctor": "doctor",
+    "guide": "guide",
+    "guidebook": "guide",
     "help": "help",
     "-h": "help",
     "--help": "help",
@@ -1294,11 +1382,24 @@ def run_cli():
         cmd_version()
         return
 
+    if cmd in ("install-repo", "uninstall-repo"):
+        cmd_repo(cmd)
+        return
+
+    if cmd == "doctor":
+        cmd_doctor(args[1:])
+        return
+
+    if cmd == "guide":
+        cmd_guide(args[1:])
+        return
+
     APP_ROOT = resolve_app_root()
     PACKAGES_DIR = APP_ROOT / "packages"
 
     if cmd == "list":
-        cmd_list(PACKAGES_DIR)
+        only = "outdated" if "--outdated" in args else "installed" if "--installed" in args else None
+        cmd_list(PACKAGES_DIR, only)
 
     elif cmd == "show":
         if len(args) < 2:

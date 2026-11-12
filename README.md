@@ -94,18 +94,15 @@ It works as an **alternative package manager for Termux**, letting you install c
 
 ---
 
-## Screenshots
-
 <div align="center">
-
-<img src="https://github.com/djunekz/termux-app-store/blob/master/.assets/0.jpeg" width="74%" alt="Termux App Store — Main View"/>
+<img src="https://github.com/djunekz/termux-app-store/blob/master/.assets/0.jpeg" width="100%" alt="Termux App Store — Main View"/>
 
 <br/><br/>
-<H1>Tui Interface</H1>
+<H1>TUI Interface</H1>
 
 | TUI Main Interface | TUI Install Interface | Menu Palette |
 |:---:|:---:|:---:|
-| <img src="https://github.com/djunekz/termux-app-store/blob/master/.assets/0main.jpg" width="220" alt="TUI Main Interface"/> | <img src="https://github.com/djunekz/termux-app-store/blob/master/.assets/1install.jpg" width="220" alt="TUI Install Interface"/> | <img src="https://github.com/djunekz/termux-app-store/blob/master/.assets/2pallete.jpg" width="220" alt="Menu Palette Interface"/> |
+| <img src="https://github.com/djunekz/termux-app-store/blob/master/.assets/0main.jpg" width="400" alt="TUI Main Interface"/> | <img src="https://github.com/djunekz/termux-app-store/blob/master/.assets/1install.jpg" width="400" alt="TUI Install Interface"/> | <img src="https://github.com/djunekz/termux-app-store/blob/master/.assets/2pallete.jpg" width="400" alt="Menu Palette Interface"/> |
 | TUI main menu | Package install process | Command palette |
 
 > TUI User-friendly with full **touchscreen** support
@@ -116,7 +113,7 @@ It works as an **alternative package manager for Termux**, letting you install c
 
 | Other tools support | CLI Install Interface | CLI View Interface |
 |:---:|:---:|:---:|
-| <img src="https://github.com/djunekz/termux-app-store/blob/master/.assets/0tas-and-termux-build.jpg" width="220" alt="Other tools support"/> | <img src="https://github.com/djunekz/termux-app-store/blob/master/.assets/0cli-install.jpg" width="220" alt="CLI Install Interface"/> | <img src="https://github.com/djunekz/termux-app-store/blob/master/.assets/0cli-view.jpg" width="220" alt="CLI View Interface"/> |
+| <img src="https://github.com/djunekz/termux-app-store/blob/master/.assets/0tas-and-termux-build.jpg" width="400" alt="Other tools support"/> | <img src="https://github.com/djunekz/termux-app-store/blob/master/.assets/0cli-install.jpg" width="400" alt="CLI Install Interface"/> | <img src="https://github.com/djunekz/termux-app-store/blob/master/.assets/0cli-view.jpg" width="400" alt="CLI View Interface"/> |
 | tasctl and termux-build | Package install process | CLI help, list and show |
 
 ---
@@ -125,7 +122,7 @@ It works as an **alternative package manager for Termux**, letting you install c
 
 | List menu | Menu about | Menu how to upload |
 |:---:|:---:|:---:|
-| <img src="https://github.com/djunekz/termux-app-store/blob/master/.assets/0guide-menu.png" width="220" alt="List menu"/> | <img src="https://github.com/djunekz/termux-app-store/blob/master/.assets/0guide-about.png" width="220" alt="Menu about"/> | <img src="https://github.com/djunekz/termux-app-store/blob/master/.assets/0guide-upload.png" width="220" alt="Menu how to upload"/> |
+| <img src="https://github.com/djunekz/termux-app-store/blob/master/.assets/0guide-menu.png" width="400" alt="List menu"/> | <img src="https://github.com/djunekz/termux-app-store/blob/master/.assets/0guide-about.png" width="400" alt="Menu about"/> | <img src="https://github.com/djunekz/termux-app-store/blob/master/.assets/0guide-upload.png" width="400" alt="Menu how to upload"/> |
 | GuideBook main menu | Information termux-app-store | Guide how to upload |
 
 > GuideBook is a information, run: `python guidebook.py`
@@ -136,7 +133,7 @@ It works as an **alternative package manager for Termux**, letting you install c
 
 | Record `termux-app-store` TUI, CLI, Other tool `tasctl`, `termux-build`, `guidebook.py` |
 |:---:|
-| <img src="https://github.com/djunekz/termux-app-store/blob/master/.assets/demo.gif" width="74%" alt="termux-app-store"/> | termux-app-store
+| <img src="https://github.com/djunekz/termux-app-store/blob/master/.assets/demo.gif" width="100%" alt="termux-app-store"/> | termux-app-store
 
 </div>
 
@@ -234,17 +231,6 @@ termux-app-store help                     # Full help
 
 | **Package Browser (TUI)** Browse packages from the `packages/` folder interactively with keyboard & touchscreen navigation.<br>**Fast Install Engine** Downloads pre-built `.deb` from mirror pool — GitHub Pages, Cloudflare CDN, jsDelivr — with automatic fallback.<br>**Binary Cache** Local `.deb` cache with 7-day TTL; cached files are re-verified against a per-arch SHA256 before every install. Cached packages install instantly.<br>**Smart Build Validator** Detects unsupported Termux dependencies with automatic status badges. | **Real-time Search & Filter** Search packages by name or description — `search`/`find` CLI commands included.<br>**Multi-package Install/Uninstall** Install or remove several packages in one command with a summary output.<br>**One-Click Manage** Install / update / uninstall Termux App Store itself via `./tasctl`.<br>**Privacy-First** No account, no tracking, no telemetry. Works from local data when already available; fetching metadata and packages needs the network. |
 |---|---|
-
----
-
-## Package Status Badges
-
-| Badge | Description |
-|---|---|
-| **NEW** | Newly added package (< 7 days) |
-| **UPDATE** | A newer version is available |
-| **INSTALLED** | Installed version is up-to-date |
-| **UNSUPPORTED** | Dependency not available in Termux |
 
 ---
 

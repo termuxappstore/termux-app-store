@@ -7,6 +7,64 @@ and this project adheres to semantic versioning.
 
 ## [Unreleased]
 
+### Update
+- Package `brutespray` v2.7.2 → v2.7.3
+
+---
+
+## [v0.11.5] - 2026-11-12
+
+### Changed
+- `termux_app_store/doctor.py` and `termux_app_store/guidebook.py` - `doctor.py` and `guidebook.py` moved into the package so `pip install` ships them; the files in the project root are now thin wrappers, so `python doctor.py`, `python guidebook.py` and the release tarball keep working, and the doctor now also looks for the project one level above the package
+- `termux_app_store/main.py` - `doctor` and `guide` no longer trigger the automatic repository setup, so the doctor reports the real repository state
+- `tests/test_cli.py` - the alias count is now 35 and the valid targets include `doctor` and `guide`
+- `.github/workflows/build.yml` - the workflow is now named `CI Build` so it can be told apart from `ci.yml`, which is also named `CI`
+- `.github/workflows/auto-update-packages.yml`, `repin-floating-sources.yml` and `auto-release.yml` - commits are now created through the GitHub API with the GitHub App token (`ci/api_commit.py`) instead of `git commit` and `git push`, so both author and committer are the app bot (`termuxappstore[bot]`) and GitHub signs the commit itself (Verified without `BOT_SIGNING_KEY`); the `Set up commit signing` step is removed from these three workflows, file modes such as the executable bit are kept, and a branch that moved on the same files makes the job stop instead of overwriting them
+- `.github/workflows/auto-update-packages.yml` - the default save mode is now `pull-request` (scheduled runs too), so results go into the rolling `auto-update/packages` PR instead of being pushed straight to the branch; `push` can still be chosen for a manual run
+- `.github/workflows/auto-update-packages.yml`, `repin-floating-sources.yml` and `auto-release.yml` (`Sync CITATION.cff` job) - checkout, push and `gh pr create` now use a short-lived token from the GitHub App (`actions/create-github-app-token` with the `APP_ID` and `APP_PRIVATE_KEY` secrets) instead of the `PAT_TOKEN` personal access token; commit signing with `BOT_SIGNING_KEY` is unchanged, and the app must be installed on the repository with Contents and Pull requests set to Read and write
+- Package `miflasher` v2.0.4 - Updated metadata
+
+### Update
+- Package `pnpm` v12.16.1 → v12.18.0
+- Package `fd` v10.5.1 → v10.5.2
+- Package `dalfox` v3.2.4 → v3.3.0
+
+
+### Added
+- Package `miflasher` v2.0.4 - A lightweight CLI tool to flash and manage Xiaomi firmware packages (Fastboot/ROM) easily and safely
+
+---
+
+## [v0.10.3] - 2026-11-06
+
+### Added
+- `termux-app-store list --installed` and `list --outdated` (also `--installed` and `--outdated` on their own) - show only the packages installed from the store, or only those with an update available, with a matching total and a clear message when the list is empty; if both flags are given, `--outdated` wins
+- `termux-app-store doctor` - runs the environment doctor from the CLI and passes its options on (`--fix`, `--brief`, `--json`, `--pkg <name>`), so pip users get it too
+- `termux-app-store guide` (alias `guidebook`) - opens the full guidebook menu; `--lang en|id` skips the language prompt and any other value is rejected
+- `tests/test_cli_tools.py` - 23 tests for the list filters, the `doctor` and `guide` commands, the root `doctor.py` and `guidebook.py` scripts and the real entry point
+- `ci/api_commit.py` - creates one commit from the changed files of the working tree through the Git Data API (blobs, tree, commit, then a fast-forward update of the branch, or a forced reset for a rolling PR branch); it sets no author or committer so GitHub attributes and signs the commit as the app, keeps file modes, refuses symlinks, and exits with 2 (nothing to commit), 3 (branch moved, retry), 4 (same files changed upstream) or 5 (unsupported file)
+- `tests/test_api_commit.py` - 12 tests for `ci/api_commit.py` with a fake API and a real temporary git repository: modified, deleted and new files, executable mode, symlink refusal, reset and create of a PR branch, upstream changes on other and on the same files, diverged branch, fast-forward rejection and API errors
+- `termux_app_store/repo_setup.py` - adds the signed APT repository (`https://djunekz.github.io/termux-app-store termux main`) the first time `termux-app-store` or `tas` runs, so a `pip install` user only has to run `pkg update` to see the mirror; pip cannot run code at install time, so this is done on first run; the key is downloaded over HTTPS and must match the pinned fingerprint, the entry always uses `signed-by` (never `trusted=yes`), an old `trusted=yes` entry is replaced, nothing is written when the key cannot be verified, a failed download is retried at most every 6 hours and never blocks or breaks the command; it only runs inside Termux and is turned off with `TAS_NO_AUTO_REPO=1` or by `uninstall-repo`
+- `termux-app-store install-repo` and `termux-app-store uninstall-repo` - CLI commands that add or remove the APT repository and key; `uninstall-repo` also stops the automatic re-adding
+- `tests/test_repo_setup.py` - 8 tests for the automatic repository setup: signed entry, running twice, wrong fingerprint, opt-out by environment variable and by `uninstall-repo`, replacing a legacy `trusted=yes` entry, offline retry limit and non-Termux no-op
+- `ci/setup_commit_signing.sh` - turns on SSH commit signing for a job from the `BOT_SIGNING_KEY` secret: it writes the key with owner-only permissions, checks that it can really sign (an encrypted or invalid key is rejected instead of breaking the job), and sets `gpg.format ssh`, `user.signingkey` and `commit.gpgsign` globally so commits in other checkouts such as `gh-pages` are signed too; without the secret it only prints a notice and the commits stay unsigned as before
+- `tests/test_commit_signing.py` - 22 tests that create a real key, run the script, make a commit and confirm GitHub-style verification passes, cover a missing, invalid, encrypted and newline-less key, and check that every workflow that runs `git commit` sets up signing first with a matching condition
+
+### Changed
+- `install.sh` - after installing, adds the signed APT repository through `tasctl install-repo --no-update`, so `pkg update` lists the mirror right away; if this step fails only a warning is shown and the installation continues
+- `tasctl` - `install-repo` accepts `--no-update` to add the repository without running `pkg update`; `install-repo` removes the opt-out marker and `uninstall-repo` creates it (`$PREFIX/etc/apt/.tas-no-auto-repo`)
+- `termux_app_store/main.py` - runs the automatic repository setup before every command except `help`, `version`, `install-repo` and `uninstall-repo`
+- `tests/test_cli.py` - the alias count is now 30 and the valid targets include `install-repo` and `uninstall-repo`
+- `.github/workflows/auto-release.yml`, `auto-update-packages.yml`, `build-packages-debs.yml`, `build-termux-repo.yml`, `repin-floating-sources.yml`, `update_index.yml` and `update_log.yml` - a `Set up commit signing` step runs before the step that commits, so commits made by the bot can show as Verified on GitHub once `BOT_SIGNING_KEY` holds a private key whose public half is registered as a Signing Key on the `termuxappstore` account; the repository signing key of the APT repository is not used for commits
+
+### Fixed
+- `.github/workflows/auto-release.yml`, `auto-update-packages.yml`, `build-packages-debs.yml`, `build-termux-repo.yml`, `repin-floating-sources.yml` and `update_log.yml` - the `Set up commit signing` step was missing, so `tests/test_commit_signing.py::test_every_workflow_that_commits_sets_up_signing_first` failed and the `Pytest` job in CI went red; the step now runs `bash ci/setup_commit_signing.sh` with `BOT_SIGNING_KEY` before the first step that runs `git commit`, with the same `if` condition as that commit step (`update_index.yml` already had it)
+
+### Update
+- Package `fd` v10.5.0 → v10.5.1
+- Package `merlin` v1.1.4 → v1.1.5
+- Package `aura` v0.10.0 → v0.11.0
+
 ---
 
 ## [v0.10.2] - 2026-11-04
@@ -95,7 +153,7 @@ and this project adheres to semantic versioning.
 
 ### Update
 - Package `termux-sync` v1.2.8 → v1.3.5
-- Package `uv` v0.13.4 → v0.13.7
+- Package `uv` v0.13.4 → v0.13.6
 - Package `infoooze` v1.1.9 → v1.2.2
 - Package `pnpm` v12.14.0 → v12.16.1
 - Package `unmineable` v0.1.0 → v0.1.5
