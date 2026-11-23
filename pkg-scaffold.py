@@ -3,6 +3,7 @@
 # Semi-Auto create build.sh
 # github.com/djunekz/termux-app-store
 
+import ast
 import hashlib
 import json
 import os
@@ -11,6 +12,7 @@ import shutil
 import sys
 import textwrap
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -65,10 +67,12 @@ BUILD_METHODS = [
 ]
 
 VERSION_RE = re.compile(r"^\d[\w.\-+]*$")
+ENTRYPOINT_RE = re.compile(r"^[A-Za-z0-9._][A-Za-z0-9._/+@-]*$")
+VERSION_PLACEHOLDER = "${TERMUX_PKG_VERSION}"
 
 
 def TW():
-    return shutil.get_terminal_size((72, 24)).columns
+    return max(shutil.get_terminal_size((72, 24)).columns, 40)
 
 
 def W():
@@ -329,6 +333,26 @@ def validate_pkg_name(val):
     return None
 
 
+def validate_command_name(val):
+    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]*$", val):
+        return "Command name may only contain letters, numbers, dots, hyphens and underscores."
+    return None
+
+
+_MAKE_BIN_RE = re.compile(
+    r"\b(?:cp|install|mv|ln)\b[^\n]*?\s"
+    r"(?:\$[({](?:DESTDIR|BINDIR|bindir|PREFIX|prefix)[)}](?:/bin)?|/usr(?:/local)?/bin)/([A-Za-z0-9][A-Za-z0-9._-]*)\s*$",
+    re.M,
+)
+
+
+def command_from_makefile(body):
+    if not body:
+        return ""
+    m = _MAKE_BIN_RE.search(body)
+    return m.group(1) if m else ""
+
+
 def validate_version(val):
     if not VERSION_RE.match(val):
         return "Version must start with a digit (e.g. 1.0.0, 2.3.4-rc1). No 'v' prefix."
@@ -338,7 +362,27 @@ def validate_version(val):
 def validate_url(val):
     if not (val.startswith("http://") or val.startswith("https://")):
         return "URL must start with http:// or https://"
+    if re.search(r"[\s\"'`\\]", val):
+        return "URL must not contain spaces, quotes, backticks or backslashes."
+    if "$" in val.replace(VERSION_PLACEHOLDER, ""):
+        return "URL may only use $ as ${TERMUX_PKG_VERSION}."
     return None
+
+
+def validate_entrypoint(val):
+    if not ENTRYPOINT_RE.match(val) or ".." in val.split("/") or len(val) > 200:
+        return "Entrypoint may only contain letters, numbers and . _ / + @ - (no spaces, no '..')."
+    return None
+
+
+def shell_value(val, force_quote=False, allow_placeholder=False):
+    val = re.sub(r"[\x00-\x1f\x7f]+", " ", str(val)).strip()
+    probe = val.replace(VERSION_PLACEHOLDER, "") if allow_placeholder else val
+    if not re.search(r"[\"$`\\]", probe):
+        if force_quote or re.search(r"[^A-Za-z0-9._/:@%+=,~?#-]", probe):
+            return f'"{val}"'
+        return val
+    return "'" + val.replace("'", "'\\''") + "'"
 
 
 def validate_sha256(val):
@@ -360,18 +404,22 @@ def _http_get(url, timeout=TIMEOUT):
         return None
 
 
-def fetch_github_meta(repo_url):
-    m = re.match(r"https://github\.com/([^/]+)/([^/\s]+?)(?:\.git)?$", repo_url)
-    if not m:
-        return {}
+def _version_from_tag(tag):
+    m = re.search(r"\d[\w.\-+]*", tag)
+    return m.group(0) if m else tag.lstrip("vV")
 
-    owner, repo = m.group(1), m.group(2)
+
+def fetch_github_meta(repo_url):
+    owner, repo = _repo_parts(repo_url)
+    if not owner:
+        return {}
+    repo_url = f"https://github.com/{owner}/{repo}"
     log(f"Fetching GitHub metadata for {owner}/{repo}...")
 
     api = f"https://api.github.com/repos/{owner}/{repo}"
     body = _http_get(api)
     if not body:
-        warn("Could not reach GitHub API (offline?).")
+        warn("Could not reach GitHub API (offline or rate limited).")
         return {}
 
     try:
@@ -383,7 +431,7 @@ def fetch_github_meta(repo_url):
     result["name"] = re.sub(r"[^a-z0-9\-]", "-", data.get("name", repo).lower()).strip("-")
     result["description"] = data.get("description") or ""
     result["homepage"] = data.get("homepage") or repo_url
-    if not result["homepage"] or result["homepage"] == "null":
+    if not str(result["homepage"]).startswith(("http://", "https://")) or validate_url(result["homepage"]):
         result["homepage"] = repo_url
 
     lic = data.get("license") or {}
@@ -399,8 +447,8 @@ def fetch_github_meta(repo_url):
             rel = json.loads(rel_body)
             tag = rel.get("tag_name", "")
             if tag:
-                result["version"] = tag.lstrip("v")
-                result["srcurl"] = f"{repo_url}/archive/refs/tags/{tag}.tar.gz"
+                result["version"] = _version_from_tag(tag)
+                result["srcurl"] = f"{repo_url}/archive/refs/tags/{urllib.parse.quote(tag, safe='/')}.tar.gz"
                 ok(f"Latest release: {tag}")
                 return result
         except Exception:
@@ -413,8 +461,8 @@ def fetch_github_meta(repo_url):
             if isinstance(tags, list) and tags:
                 tag = tags[0].get("name", "")
                 if tag:
-                    result["version"] = tag.lstrip("v")
-                    result["srcurl"] = f"{repo_url}/archive/refs/tags/{tag}.tar.gz"
+                    result["version"] = _version_from_tag(tag)
+                    result["srcurl"] = f"{repo_url}/archive/refs/tags/{urllib.parse.quote(tag, safe='/')}.tar.gz"
                     ok(f"No release found, using latest tag: {tag}")
                     return result
         except Exception:
@@ -445,6 +493,9 @@ def fetch_github_meta(repo_url):
 
 
 def compute_sha256_from_url(url):
+    if not url.startswith(("http://", "https://")):
+        warn("Refusing to download a non-HTTP URL.")
+        return None
     log("Downloading to compute SHA256...")
     info(url)
     try:
@@ -480,14 +531,18 @@ termux_step_make_install() {{
     mkdir -p "$libdir"
     cp -r . "$libdir/"
 
-    find "$libdir" -type d | while read -r _dir; do
-        ls "$_dir"/*.py &>/dev/null 2>&1 && [ ! -f "$_dir/__init__.py" ] && \\
-            touch "$_dir/__init__.py"
-    done
+    if [ -f requirements.txt ]; then
+        pip install --no-cache-dir --disable-pip-version-check --target "$libdir/.pydeps" -r requirements.txt \\
+            || sed 's/[[:space:]]*#.*//' requirements.txt | grep -vE '^[[:space:]]*(-|$)' | while read -r _req; do
+                pip install --no-cache-dir --disable-pip-version-check --target "$libdir/.pydeps" "$_req" \\
+                    || pip show "${{_req%%[<>=!~;[ ]*}}" > /dev/null 2>&1 \\
+                    || {{ echo "Missing Python dependency: $_req" >&2; exit 1; }}
+            done
+    fi
 
     cat > "$TERMUX_PREFIX/bin/{pkg}" <<\'WRAPPER\'
 #!/data/data/com.termux/files/usr/bin/bash
-cd "/data/data/com.termux/files/usr/lib/{pkg}" || exit 1
+export PYTHONPATH="/data/data/com.termux/files/usr/lib/{pkg}/.pydeps:/data/data/com.termux/files/usr/lib/{pkg}${{PYTHONPATH:+:$PYTHONPATH}}"
 exec python3 "/data/data/com.termux/files/usr/lib/{pkg}/{entrypoint}" "$@"
 WRAPPER
     chmod 0755 "$TERMUX_PREFIX/bin/{pkg}"
@@ -495,9 +550,8 @@ WRAPPER
     "pip": """\
 termux_step_make_install() {{
     pip install --quiet setuptools wheel --break-system-packages 2>/dev/null || true
-    pip install . --prefix="$TERMUX_PREFIX" --no-deps --break-system-packages 2>/dev/null \\
-        || pip install . --prefix="$TERMUX_PREFIX" --no-deps --no-build-isolation \\
-               --break-system-packages
+    pip install . --prefix="$TERMUX_PREFIX" --break-system-packages \\
+        || pip install . --prefix="$TERMUX_PREFIX" --no-build-isolation --break-system-packages
 }}""",
     "shell": """\
 termux_step_make_install() {{
@@ -514,7 +568,7 @@ WRAPPER
 }}""",
     "npm": """\
 termux_step_make_install() {{
-    npm install --prefix "$TERMUX_PREFIX" -g .
+    npm install --prefix "$TERMUX_PREFIX" -g --install-links .
 }}""",
     "cargo": """\
 termux_step_make_install() {{
@@ -529,11 +583,35 @@ termux_step_make_install() {{
 }}""",
     "make": """\
 termux_step_make() {{
-    make -j"$(nproc)" PREFIX="$TERMUX_PREFIX"
+    local _mk _t _target=""
+    for _mk in GNUmakefile makefile Makefile; do
+        [ -f "$_mk" ] && break
+    done
+    for _t in all {pkg} build release; do
+        if grep -qE "^$_t[[:space:]]*:" "$_mk"; then
+            _target="$_t"
+            break
+        fi
+    done
+    if [ -n "$_target" ]; then
+        make -j"$(nproc)" PREFIX="$TERMUX_PREFIX" "$_target"
+    fi
 }}
 
 termux_step_make_install() {{
-    make install PREFIX="$TERMUX_PREFIX"
+    local _mk
+    for _mk in GNUmakefile makefile Makefile; do
+        [ -f "$_mk" ] && break
+    done
+    if grep -qE '^install[[:space:]]*:' "$_mk" \\
+        && ! grep -A8 -E '^install[[:space:]]*:' "$_mk" | grep -q 'sudo'; then
+        make install PREFIX="$TERMUX_PREFIX" DESTDIR=""
+    elif [ -x "{pkg}" ]; then
+        install -Dm755 "{pkg}" "$TERMUX_PREFIX/bin/{pkg}"
+    else
+        echo "No usable 'make install' target and no built binary named {pkg}" >&2
+        return 1
+    fi
 }}""",
     "cmake": '''\
 TERMUX_PKG_EXTRA_CONFIGURE_ARGS="
@@ -542,8 +620,13 @@ TERMUX_PKG_EXTRA_CONFIGURE_ARGS="
 "''',
     "ruby": """\
 termux_step_make_install() {{
-    ls *.gemspec 2>/dev/null && gem build *.gemspec && gem install --local *.gem --no-document \\
-        || {{ mkdir -p "$TERMUX_PREFIX/lib/{pkg}"; cp -r . "$TERMUX_PREFIX/lib/{pkg}/"; }}
+    if ls ./*.gemspec > /dev/null 2>&1; then
+        gem build ./*.gemspec
+        gem install --local ./*.gem --no-document
+    else
+        mkdir -p "$TERMUX_PREFIX/lib/{pkg}"
+        cp -r . "$TERMUX_PREFIX/lib/{pkg}/"
+    fi
 }}""",
     "perl": """\
 termux_step_make_install() {{
@@ -558,21 +641,29 @@ WRAPPER
 }}""",
     "lua": """\
 termux_step_make_install() {{
-    install -Dm755 "{entrypoint}" "$TERMUX_PREFIX/bin/{pkg}"
+    local libdir="$TERMUX_PREFIX/lib/{pkg}"
+    mkdir -p "$libdir"
+    cp -r . "$libdir/"
+    chmod 0755 "$libdir/{entrypoint}"
+    cat > "$TERMUX_PREFIX/bin/{pkg}" <<\'WRAPPER\'
+#!/data/data/com.termux/files/usr/bin/bash
+export LUA_PATH="/data/data/com.termux/files/usr/lib/{pkg}/?.lua;/data/data/com.termux/files/usr/lib/{pkg}/?/init.lua;;"
+exec lua "/data/data/com.termux/files/usr/lib/{pkg}/{entrypoint}" "$@"
+WRAPPER
+    chmod 0755 "$TERMUX_PREFIX/bin/{pkg}"
 }}""",
     "php": """\
 termux_step_make_install() {{
     mkdir -p "$TERMUX_PREFIX/lib/{pkg}"
     cp -r . "$TERMUX_PREFIX/lib/{pkg}/"
     cat > "$TERMUX_PREFIX/bin/{pkg}" <<\'WRAPPER\'
-#!/usr/bin/env bash
+#!/data/data/com.termux/files/usr/bin/bash
 exec php "/data/data/com.termux/files/usr/lib/{pkg}/{entrypoint}" "$@"
 WRAPPER
     chmod 0755 "$TERMUX_PREFIX/bin/{pkg}"
 }}""",
     "unknown": """\
 termux_step_make_install() {{
-    # TODO: implement install steps
     echo "Placeholder -- edit this function"
     mkdir -p "$TERMUX_PREFIX/lib/{pkg}"
     cp -r . "$TERMUX_PREFIX/lib/{pkg}/"
@@ -632,6 +723,79 @@ def _repo_parts(repo_url):
     return (m.group(1), m.group(2)) if m else (None, None)
 
 
+_PIP_ALIASES = {
+    "yaml": "pyyaml",
+    "bs4": "beautifulsoup4",
+    "cv2": "opencv-python",
+    "PIL": "pillow",
+    "sklearn": "scikit-learn",
+    "dateutil": "python-dateutil",
+    "dotenv": "python-dotenv",
+    "OpenSSL": "pyopenssl",
+    "Crypto": "pycryptodome",
+    "serial": "pyserial",
+    "git": "gitpython",
+    "jwt": "pyjwt",
+    "socks": "pysocks",
+    "attr": "attrs",
+    "magic": "python-magic",
+    "websocket": "websocket-client",
+    "docx": "python-docx",
+    "zmq": "pyzmq",
+    "telegram": "python-telegram-bot",
+    "slugify": "python-slugify",
+    "discord": "discord.py",
+}
+_REPO_DIRS = set()
+_PIP_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def infer_python_requirements(source, local_names):
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return []
+    stdlib = set(getattr(sys, "stdlib_module_names", ())) or set(sys.builtin_module_names)
+    found = []
+
+    def guarded(node):
+        for h in node.handlers:
+            if h.type is None:
+                return True
+            elts = h.type.elts if isinstance(h.type, ast.Tuple) else [h.type]
+            if any(getattr(e, "id", "") in ("ImportError", "ModuleNotFoundError", "Exception") for e in elts):
+                return True
+        return False
+
+    def visit(body):
+        for n in body:
+            if isinstance(n, ast.Import):
+                found.extend(a.name.split(".")[0] for a in n.names)
+            elif isinstance(n, ast.ImportFrom):
+                if n.level == 0 and n.module:
+                    found.append(n.module.split(".")[0])
+            elif isinstance(n, ast.If):
+                if not any(k in ast.dump(n.test) for k in ("version_info", "platform", "TYPE_CHECKING")):
+                    visit(n.body)
+                    visit(n.orelse)
+            elif isinstance(n, ast.With):
+                visit(n.body)
+            elif isinstance(n, ast.Try):
+                if not guarded(n):
+                    visit(n.body)
+                visit(n.orelse)
+
+    visit(tree.body)
+    names = []
+    for mod in found:
+        if mod in stdlib or mod == "__future__" or mod in local_names:
+            continue
+        pip_name = _PIP_ALIASES.get(mod, mod)
+        if _PIP_NAME_RE.match(pip_name) and pip_name not in names:
+            names.append(pip_name)
+    return names
+
+
 def fetch_repo_tree(repo_url, default_branch="main"):
     owner, repo = _repo_parts(repo_url)
     if not owner:
@@ -643,6 +807,8 @@ def fetch_repo_tree(repo_url, default_branch="main"):
         tree = json.loads(body).get("tree", [])
     except Exception:
         return None
+    _REPO_DIRS.clear()
+    _REPO_DIRS.update(t["path"] for t in tree if t.get("type") == "tree")
     return [{"path": t["path"], "size": t.get("size", 0)} for t in tree if t.get("type") == "blob"]
 
 
@@ -662,6 +828,7 @@ def _sniff_shebang(repo_url, branch, path):
 
 def detect_entrypoints(repo_url, branch, files):
     found = []
+    sniffed = 0
     for f in files:
         name = f["path"]
         ext = os.path.splitext(name)[1].lower()
@@ -675,6 +842,9 @@ def detect_entrypoints(repo_url, branch, files):
                 ("LICENSE", "README", "MAKEFILE", "DOCKERFILE", "CHANGELOG", "AUTHORS", "CODEOWNERS")
             )
         ):
+            if sniffed >= 25:
+                continue
+            sniffed += 1
             m = _sniff_shebang(repo_url, branch, name)
             if m:
                 found.append((name, m))
@@ -708,6 +878,18 @@ def rank_entrypoints(found, pkg):
     return sorted(found, key=score)
 
 
+_COMPILED_EXT = (".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".s", ".asm", ".zig", ".nim", ".f90")
+_COMPILER_RE = re.compile(r"\$\((?:CC|CXX|CFLAGS|LDFLAGS)\)|\b(?:gcc|g\+\+|clang|clang\+\+|rustc|cargo|go build)\b")
+
+
+def _makefile_builds_something(body, filenames):
+    if any(f.lower().endswith(_COMPILED_EXT) for f in filenames):
+        return True
+    if body is None:
+        return True
+    return bool(_COMPILER_RE.search(body))
+
+
 def detect_method_from_github(repo_url, default_branch="main", files=None):
     if files is None:
         files = fetch_repo_tree(repo_url, default_branch)
@@ -723,6 +905,12 @@ def detect_method_from_github(repo_url, default_branch="main", files=None):
                 return method, sig
         else:
             if sig in filenames:
+                if method == "make":
+                    owner, repo = _repo_parts(repo_url)
+                    body = _http_get(f"https://raw.githubusercontent.com/{owner}/{repo}/{default_branch}/{sig}")
+                    if not _makefile_builds_something(body, filenames):
+                        info(f"Ignoring {sig}: it does not compile anything, looking for a script instead")
+                        continue
                 return method, sig
 
     return None, None
@@ -732,30 +920,50 @@ def build_sh_content(data):
     pkg = data["name"]
     method = data["method"]
     entrypoint = data.get("entrypoint", f"{pkg}.py")
+    if validate_entrypoint(entrypoint):
+        raise ValueError(f"unsafe entrypoint: {entrypoint!r}")
+    if validate_pkg_name(pkg):
+        raise ValueError(f"invalid package name: {pkg!r}")
 
     template = INSTALL_TEMPLATES.get(method, INSTALL_TEMPLATES["unknown"])
     install_fn = template.format(pkg=pkg, entrypoint=entrypoint)
+    command = data.get("command") or pkg
+    if validate_command_name(command):
+        raise ValueError(f"invalid command name: {command!r}")
+    if command != pkg and method in ("python-script", "shell", "perl", "lua", "php"):
+        install_fn = install_fn.replace(f"$TERMUX_PREFIX/bin/{pkg}", f"$TERMUX_PREFIX/bin/{command}")
+    pip_names = [n for n in data.get("pip_requirements", []) if _PIP_NAME_RE.match(n)]
+    if method == "python-script" and pip_names:
+        marker = '    cp -r . "$libdir/"\n'
+        install_fn = install_fn.replace(
+            marker,
+            marker
+            + '    pip install --no-cache-dir --disable-pip-version-check --target "$libdir/.pydeps" '
+            + " ".join(pip_names)
+            + "\n",
+            1,
+        )
 
     base_dep = DEPENDS_FOR_METHOD.get(method, "")
     extra_dep = data.get("depends", "").strip()
-    if base_dep and extra_dep:
-        all_deps = f"{base_dep}, {extra_dep}"
-    elif base_dep:
-        all_deps = base_dep
-    else:
-        all_deps = extra_dep
+    dep_list = []
+    for item in f"{base_dep},{extra_dep}".split(","):
+        item = item.strip()
+        if item and item not in dep_list:
+            dep_list.append(item)
+    all_deps = ", ".join(dep_list)
 
     lines = []
-    lines.append(f"TERMUX_PKG_HOMEPAGE={data['homepage']}")
-    lines.append(f'TERMUX_PKG_DESCRIPTION="{data["description"]}"')
-    lines.append(f'TERMUX_PKG_LICENSE="{data["license"]}"')
-    lines.append(f'TERMUX_PKG_MAINTAINER="{data["maintainer"]}"')
-    lines.append(f"TERMUX_PKG_VERSION={data['version']}")
-    lines.append(f"TERMUX_PKG_SRCURL={data['srcurl']}")
-    lines.append(f"TERMUX_PKG_SHA256={data['sha256']}")
+    lines.append(f"TERMUX_PKG_HOMEPAGE={shell_value(data['homepage'])}")
+    lines.append(f"TERMUX_PKG_DESCRIPTION={shell_value(data['description'], force_quote=True)}")
+    lines.append(f"TERMUX_PKG_LICENSE={shell_value(data['license'], force_quote=True)}")
+    lines.append(f"TERMUX_PKG_MAINTAINER={shell_value(data['maintainer'], force_quote=True)}")
+    lines.append(f"TERMUX_PKG_VERSION={shell_value(data['version'])}")
+    lines.append(f"TERMUX_PKG_SRCURL={shell_value(data['srcurl'], allow_placeholder=True)}")
+    lines.append(f"TERMUX_PKG_SHA256={shell_value(data['sha256'])}")
 
     if all_deps:
-        lines.append(f'TERMUX_PKG_DEPENDS="{all_deps}"')
+        lines.append(f"TERMUX_PKG_DEPENDS={shell_value(all_deps, force_quote=True)}")
 
     if method in ("python-script", "pip", "shell", "npm", "ruby", "perl", "lua", "php", "unknown"):
         lines.append("TERMUX_PKG_BUILD_IN_SRC=true")
@@ -780,6 +988,10 @@ def find_packages_dir():
 
 def main():
     args = sys.argv[1:]
+
+    if "-h" in args or "--help" in args:
+        print("Usage: pkg-scaffold.py [package-name | --from <github-url>]")
+        return
 
     banner()
 
@@ -989,6 +1201,7 @@ def main():
             entrypoint = ask(
                 "Main entrypoint file",
                 default=_default_entry,
+                validator=validate_entrypoint,
                 hint="filename relative to source root that starts the program",
             )
             if _root_names is None or entrypoint in _root_names:
@@ -1012,6 +1225,46 @@ def main():
                 "warning",
             )
             blank()
+
+    command = pkg_name
+    if method in ("python-script", "shell", "perl", "lua", "php") and github_url and _repo_files is not None:
+        _mk_names = [f["path"] for f in _repo_files if f["path"] in ("Makefile", "makefile", "GNUmakefile")]
+        if _mk_names:
+            _owner, _repo = _repo_parts(github_url)
+            _mk_body = _http_get(f"https://raw.githubusercontent.com/{_owner}/{_repo}/{_default_branch}/{_mk_names[0]}")
+            _cmd = command_from_makefile(_mk_body)
+            if _cmd and _cmd != pkg_name:
+                ok(f"{_mk_names[0]} installs the program as {BCYN}{_cmd}{R}")
+                command = ask(
+                    "Command name users will type",
+                    default=_cmd,
+                    validator=validate_command_name,
+                    hint="the upstream project documents this name",
+                )
+                blank()
+
+    pip_requirements = []
+    if method == "python-script" and github_url and _repo_files is not None:
+        if "requirements.txt" in {f["path"] for f in _repo_files}:
+            info("requirements.txt found: it is installed automatically while building.")
+        else:
+            _owner, _repo = _repo_parts(github_url)
+            _src = _http_get(f"https://raw.githubusercontent.com/{_owner}/{_repo}/{_default_branch}/{entrypoint}")
+            if _src:
+                _local = {Path(f["path"]).stem for f in _repo_files if f["path"].endswith(".py")} | set(_REPO_DIRS)
+                _mods = infer_python_requirements(_src, _local)
+                if _mods:
+                    blank()
+                    ok(f"{entrypoint} imports third-party modules: {BCYN}{', '.join(_mods)}{R}")
+                    _ans = ask_optional(
+                        "Python modules to install with pip",
+                        default=", ".join(_mods),
+                        hint="comma-separated pip names; type - to install nothing",
+                    )
+                    for _m in _ans.replace(" ", "").split(","):
+                        if _m and _m != "-" and _PIP_NAME_RE.match(_m) and _m not in pip_requirements:
+                            pip_requirements.append(_m)
+                    blank()
 
     subsection("Step 6  --  Additional Dependencies (optional)")
     blank()
@@ -1068,16 +1321,24 @@ def main():
         "method": method,
         "entrypoint": entrypoint,
         "depends": extra_dep,
+        "pip_requirements": pip_requirements,
+        "command": command,
     }
 
     packages_dir = find_packages_dir()
     pkg_dir = packages_dir / pkg_name
     build_sh = pkg_dir / "build.sh"
 
-    pkg_dir.mkdir(parents=True, exist_ok=True)
-    content = build_sh_content(data)
+    if build_sh.exists() and not ask_yn(f"{build_sh} already exists. Overwrite it?", default_yes=False):
+        blank()
+        warn("Aborted. Existing build.sh was left untouched.")
+        blank()
+        sys.exit(0)
 
-    build_sh.write_text(content)
+    content = build_sh_content(data)
+    pkg_dir.mkdir(parents=True, exist_ok=True)
+
+    build_sh.write_text(content, encoding="utf-8")
     build_sh.chmod(0o755)
 
     blank()

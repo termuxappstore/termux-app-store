@@ -7,16 +7,106 @@ and this project adheres to semantic versioning.
 
 ## [Unreleased]
 
+### Removed
+- Package `cloudflair` - Removed
+- Package `clickjacking-tester` - Removed
+- Package `myserver` - Removed
+
+### Added
+- Package `leaf` v1.29.3 - Terminal Markdown previewer — GUI-like experience.
+- `build-tester.py` - new `Runtime` check that warns about `pip install` / `npm install` failures that are ignored (`|| echo`, `|| true`, `2>/dev/null ||`), `--no-deps` used everywhere, hyphenated `python -m` names, wrappers that `cd`, and `python` / `nodejs` missing from `TERMUX_PKG_DEPENDS`
+- `build-tester.py` - `--deep` now downloads the source and compares `requirements.txt`, `pyproject.toml`, `setup.py`, `setup.cfg` and `package.json` with what `build.sh` really installs; dependencies that are declared but never installed are reported as errors
+- `tas doctor --modules [package]` - checks installed TAS packages on the device: imports of the entry script that cannot be found, Node.js dependencies missing from `node_modules`, broken symlinks and missing `Depends`; `--fix` runs the suggested `pkg install`, `pip install` or `npm install` command
+- `tas doctor` - new `Package runtime` check in the `Build` section that points to `--modules` when an installed package is broken
+- `tests/test_runtime_tools.py` - tests for the new `build-tester.py` and `doctor.py` checks
+- `tests/test_install_runtime_fixes.py` - new tests that check every `pkg-scaffold.py` template with `bash -n`, the dependency handling of the generated `build.sh`, and the staging, `Depends` and restart logic of `build-package.sh`
+- `ci/publish_gh_pages.sh` - publishes the `gh-pages` working tree as one new commit without a parent and pushes it with `--force-with-lease` pinned to the commit that was checked out; nothing is pushed when the tree did not change, and a missing branch is created
+- `tests/test_publish_gh_pages.py` - tests for `ci/publish_gh_pages.sh` with a real bare repository: history collapsed into one commit, no push without changes, a late run refused when a newer publish landed, and a branch that does not exist yet
+
+### Changed
+- `.github/workflows/build-packages-debs.yml` - the workflow now also starts on every push to `master` that touches `packages/*/build.sh`, so a merged update PR builds its `.deb` without a manual run; before this it only ran on the weekly schedule or when `update_index.yml` dispatched it
+- `.github/workflows/build-packages-debs.yml` - on a push the packages to build come from the files changed between `github.event.before` and the pushed commit instead of `HEAD~1:tools/index.json`, which found nothing as soon as another commit landed after the index commit
+- `.github/workflows/build-packages-debs.yml` - every push, scheduled and manual run without a package name also adds packages whose `TERMUX_PKG_VERSION` is not in the published `tools/index.json` (at most 20), so a build that was skipped or failed is picked up by the next run
+- `.github/workflows/build-packages-debs.yml` - runs are queued with a `concurrency` group so two publishes never push to `gh-pages` at the same time
+- `.github/workflows/build-packages-debs.yml` - the publish job regenerates `tools/index.json` with `tools/build.py`, so it no longer depends on `update_index.yml` having already committed the new index
+- `.github/workflows/update_index.yml` - also copies the generated `tools/index.json` to `termux_app_store/data/index.json` and commits both files, and a change in either file counts as an index change; the bundled copy had fallen behind (89 packages, still listing `clickjacking-tester` and `cloudflair`, missing `leaf`) and was refreshed
+- `.github/workflows/update_index.yml` - removed the step that dispatched `build-packages-debs.yml` with `PAT_TOKEN`; it only printed a warning on failure and is replaced by the push trigger
+- `.github/workflows/build-packages-debs.yml` and `.github/workflows/build-termux-repo.yml` - both publish to `gh-pages` through `ci/publish_gh_pages.sh` instead of `git commit` and `git push`, so the branch keeps one commit instead of one per publish; before this the branch had 518 commits and the repository was 4145 MiB although the published tree is 451.6 MiB, because every replaced `.deb` stayed in the history; `--force-with-lease` makes a workflow that started from an older checkout fail instead of overwriting a newer publish
+- `tests/test_commit_signing.py` - a step that runs `ci/publish_gh_pages.sh` counts as a committing step, so commit signing must still be set up before it
+- `build-package.sh` - the generated `.deb` now has a `Depends:` line built from `TERMUX_PKG_DEPENDS`, the runtime found in the installed launchers (`python`, `nodejs`, `perl`, `ruby`, `php`) and the Termux packages that own Python dependencies; build-only toolchains (`rust`, `golang`, `clang`, `cmake`, `make`, `pkg-config` and similar) are left out, and a `Homepage:` field is written
+- `build-package.sh` - Node.js packages found automatically are installed with `npm install -g --install-links`, so npm copies the package and its dependencies instead of linking to the build folder
+- `pkg-scaffold.py` - the `pip` template installs the dependencies of the project instead of using `--no-deps`, the `npm` template uses `--install-links`, and the `lua` template copies the whole project and sets `LUA_PATH`
+- `termux_app_store/data/build-package.sh` - synced with `build-package.sh`
+- Package `hash-buster` v3.0 - Updated metadata
+- Package `killchain` v0.0.0+fef616f - Updated metadata
+- Package `userfinder` v0.0.0+a08a9a6 → Updated metadata
+
+### Fixed
+- `build-package.sh` - packages failed at run time with `No module named ...` or `Cannot find module ...` because their dependencies never reached the `.deb`: Python dependencies installed by `pip` are now staged together with the whole dependency tree of the package (and of every distribution installed during the build), skipping files that already belong to a Termux package
+- `build-package.sh` - `npm install -g .` links `lib/node_modules/<name>` to the build folder without installing dependencies; the link was copied as a link (dangling on the device) and the `bin` entry was copied as a plain file, which broke every relative `require`; links are now resolved, `bin` symlinks are kept, missing production dependencies are installed into the staged copy, and the staged npm package is found even when its npm name differs from the package name
+- `build-package.sh` - the Python module launcher used the package name with hyphens (`python3 -m my-tool`) and changed into the library folder; it now looks for the real module folder with `__main__.py`, uses `PYTHONPATH` and no longer changes the current directory
+- `build-package.sh` - generated wrappers for Python scripts call `python3` by name instead of the shebang path of the upstream script (`/usr/bin/python3` only works when `termux-exec` is active), and bundle `requirements.txt` into `lib/<package>/.pydeps`; wrappers written by older `build.sh` files are patched to include it, and a requirement that cannot be installed now stops the build with the name of the requirement
+- `build-package.sh` - every file the install step wrote under `PREFIX` (gems, extra data, plugins) is now captured, not only when nothing else was staged
+- `build-package.sh` - the automatic restart after a Rust update ran `exec "$0" "$@"` inside a function, so the package name was lost; the original arguments are kept and the restart can only happen once
+- `build-package.sh` - the spinner of the custom install step for prebuilt `.deb` files printed raw line breaks instead of carriage returns and flooded the terminal
+- `build-package.sh` - the syntax check no longer reads `$?` after `|| true`, and the error line is read without `grep -P`
+- `build-package.sh` - any unexpected failure now prints the line number and command (`ERR` trap with `set -E`) instead of exiting silently in the middle of the build, as in the `openclaw-termux` log after `Staged npm`
+- `build-package.sh` - the new error trap no longer prints `ERROR line N: tput cols` on images without `tput` (such as termux-docker in CI): terminal width lookups cannot fail anymore and the trap only reports failures of the main script, not of command substitutions or background steps
+- `build-package.sh` - commands installed from Python scripts no longer print `SyntaxWarning: invalid escape sequence` from the upstream source every time they start (Python 3.12 reports it whenever the main script is compiled, and the main script is not cached); the launchers it generates, and bash wrappers written by existing `build.sh` files that run `python`, now set `PYTHONWARNINGS=ignore::SyntaxWarning`
+- `build-package.sh` - the staging log no longer lists the same `bin` and `lib` path twice when the original and the sanitised package name are equal, and no longer prints `Python files: 0`
+- `build-package.sh` - warns about staged symlinks that point into the build folder or are dangling
+- `pkg-scaffold.py` - the `python-script` template installs `requirements.txt` into `lib/<package>/.pydeps`, puts it on `PYTHONPATH`, no longer changes the current directory and no longer creates `__init__.py` files inside the upstream source
+- `pkg-scaffold.py` - a `Makefile` is no longer chosen when the repo has no compiled sources and the makefile never calls a compiler (for example Hash-Buster, whose `install` target runs `sudo cp ... /usr/bin`); the wizard then falls back to the script methods, so `make` is not run and the build no longer stops with `sudo: No such file or directory`
+- `pkg-scaffold.py` - the `make` template builds only an `all`, package-name, `build` or `release` target instead of the default target, runs `make install` only when its recipe does not use `sudo`, and otherwise installs a built binary named like the package or stops with a clear message
+- `pkg-scaffold.py` - for `python-script` packages without `requirements.txt` the wizard reads the entrypoint, lists the third-party modules it imports (for example `requests`) and writes a `pip install --target lib/<package>/.pydeps` line for them, so the installed command no longer fails with `No module named ...`
+- `pkg-scaffold.py` - when a script project ships a `makefile` that installs the program under another name (Hash-Buster copies `hash.py` to `buster`), the wizard reads that name and offers it as the command name, so the installed command matches the upstream documentation; the library folder keeps the package name
+- `pkg-scaffold.py` and `termux_app_store/doctor.py` - added module-to-pip-name aliases for `websocket` (`websocket-client`), `docx`, `zmq`, `telegram`, `slugify` and `discord`, so `import websocket` no longer leads to the unrelated `websocket` package
+- `pkg-scaffold.py` - the `php` wrapper now uses the explicit Termux `bash` path instead of `#!/usr/bin/env`, so it also works where `termux-exec` is not active; the `ruby` template no longer prints `ls` output or depends on `&&` / `||` precedence; the placeholder comment is no longer written into `build.sh` for the `unknown` method
+- `pkg-scaffold.py` - GitHub URLs with a trailing slash or `.git` are accepted and normalised for the generated `SRCURL`, release tags such as `release-2.0` give a valid version, an invalid homepage falls back to the repository URL, duplicated dependencies are removed, at most 25 extensionless files are checked for a shebang, narrow terminals no longer crash the layout, and `--help` prints usage
+
 ### Update
-- Package `brutespray` v2.7.2 → v2.7.5
-- Package `uv` v0.13.7 → v0.13.8
+- Package `termux-sync` v1.3.6 → v1.3.9
+- Package `tdoc` v2.3.0 → v2.3.1
+- Package `zorabuilder` v2.0.0 → v2.1.0
+
+---
+
+## [v0.12.6] - 2026-11-18
+
+### Update
+- Package `brutespray` v2.7.2 → v2.7.6
+- Package `uv` v0.13.7 → v0.13.9
 - Package `zorabuilder` v1.0.0 → v2.0.0
 - Package `termux-sync` v1.3.5 → v1.3.6
 - Package `baxter` v1.2.4 → v1.4.0
 - Package `pnpm` v12.18.0 → v12.21.0
 
 ### Changed
+- `README.md` - update assets
+- `README.id.md`, `README.th.md`, `README.jp.md`, `README.ch.md`, `README.vi.md` and `README.in.md` - all translations now follow the current `README.md` (same sections, install and usage tables, fast install flow, architecture, security, development and testing, contributing, help and documentation) instead of the older shorter versions; the images and videos now use the same GitHub-hosted `user-attachments` URLs as `README.md`, so the translated READMEs no longer depend on the `.assets` folder
 - Package `brutespray` v2.7.3 - Updated metadata
+- `.github/workflows/ci.yml`, `codeql.yml`, `build-packages-debs.yml`, `auto-update-packages.yml`, `repin-floating-sources.yml` and `auto-release.yml` - every remaining action reference (`checkout`, `setup-python`, `cache`, `create-github-app-token`, `codeql-action`) is now pinned to a full commit SHA
+- `.github/workflows/` - `persist-credentials: false` added to 16 checkouts that never push, so the token is no longer left in `.git/config`
+- `.github/dependabot.yml` - added a 7 day cooldown for GitHub Actions updates
+- `.github/workflows/build-packages-debs.yml` - `apt-get update` runs before installing the publish tools, and the build summary is written through a single quoted redirect
+- `build-tester.py` - `.deb` is accepted as a SRCURL extension, SRCURL checks require `http://` or `https://`, files are read as UTF-8, and `--json` exits with 0 on warnings like the normal mode does
+
+### Security
+- `pkg-scaffold.py` - description, license, maintainer, homepage, SRCURL and dependencies from GitHub metadata or user input are now quoted safely before they are written to `build.sh`, so values containing `"`, `$(...)` or backticks can no longer break the file or run commands when it is sourced; entrypoint and URL values are validated and the SHA256 download only accepts `http(s)` URLs
+- `termux_app_store/doctor.py` - dependency names read from a `build.sh` and file paths are shell-quoted before `pkg info` and `bash -n` run, which closes a command injection when diagnosing an untrusted package
+- `termux_app_store/core/binary_core.py` - package name, version and architecture are validated before they become a cache file name or URL, mirrors must use `https://`, downloads are capped at 512 MiB, and SHA256 comparison ignores letter case
+- `termux_app_store/fast_install.py` and `termux_app_store/termux_app_store_cli.py` - `.deb` downloads are capped at 512 MiB, and the CLI no longer reads an unbounded response into memory
+- `termux_app_store/termux_app_store.py` - the homepage action only opens `http://` and `https://` links
+- `.github/workflows/auto-release.yml` - the tag name and version are passed through environment variables instead of being expanded into the script, the changelog entry is matched with `awk -v`, and the workflow token defaults to read-only
+- `.github/workflows/pr-checker.yml` - values read from a PR's `build.sh` are stripped of backslashes, backticks and control characters before they reach the report comment, package names are restricted by regex, and `curl` is limited to HTTP(S) with a redirect, size and time cap
+- `.github/workflows/lint-checker.yml`, `build-termux-repo.yml` and `build-packages-debs.yml` - step outputs and the repository token are passed through environment variables instead of being expanded into shell scripts
+- `.github/workflows/build-packages-debs.yml` - package URLs must start with `http://` or `https://`, and `curl` receives them after `--` with protocol, redirect and time limits
+
+### Fixed
+- `pkg-scaffold.py` - an existing `packages/<name>/build.sh` is no longer overwritten without confirmation, the file is written as UTF-8, release tags are URL-encoded in the generated SRCURL, and the generated Python install step no longer aborts under `set -euo pipefail` when the last scanned folder has no `.py` file
+- `build-tester.py` - `--json` output is valid again because the network check messages go to stderr, and the two `mypy` errors are fixed
+- `termux_app_store/utils/installer.py` - the result of `apt-get install -f -y` is returned after a failed `dpkg -i`, and `build-package.sh` is also looked up in the packaged `data` folder so source builds work after `pip install`
+- `tests/test_audit_fixes.py` - new tests for the safe `build.sh` quoting, entrypoint and URL validation, and the binary cache identifier, mirror and SHA256 checks
 
 ---
 
